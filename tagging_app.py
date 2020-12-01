@@ -3,7 +3,9 @@ import datasets
 import json
 import os
 import streamlit as st
+from pathlib import Path
 import yaml
+from typing import Dict
 
 from dataclasses import asdict
 from glob import glob
@@ -63,12 +65,6 @@ def filter_features(feature_dict):
                 "feature_type": feature_dict["_type"],
                 "feature": filter_features(feature_dict["feature"]),
             }
-        elif "_type" in feature_dict["feature"] and feature_dict["feature"]["_type"] == "ClassLabel":
-            return {
-                "feature_type": feature_dict["_type"],
-                "dtype": "int32",
-                "feature": filter_features(feature_dict["feature"]),
-            }
         else:
             return dict(
                 [("feature_type", feature_dict["_type"])] + \
@@ -89,7 +85,6 @@ def filter_features(feature_dict):
     else:
         return dict([(k, filter_features(v)) for k, v in feature_dict.items()])
 
-
 @st.cache
 def find_languages(feature_dict):
     if type(feature_dict) in [dict, datasets.features.Features]:
@@ -102,37 +97,10 @@ def find_languages(feature_dict):
 
 keep_keys = ['description', 'features', 'homepage', 'license', 'splits']
 
-@st.cache(show_spinner=False)
-def get_info_dicts(dataset_id):
-    module_path = datasets.load.prepare_module(dataset_id, dataset=True)
-    builder_cls = datasets.load.import_main_class(module_path[0], dataset=True)
-    build_confs = builder_cls.BUILDER_CONFIGS
-    confs = [conf.name for conf in build_confs] if len(build_confs) > 0 else ['default']
-    all_info_dicts = {}
-    for conf in confs:
-        builder = builder_cls(name=conf)
-        conf_info_dict = dict([(k, v) for k, v in asdict(builder.info).items() if k in keep_keys])
-        all_info_dicts[conf] = conf_info_dict
-    return all_info_dicts
-
-@st.cache
-def get_dataset_list():
-    return datasets.list_datasets()
-
-@st.cache(show_spinner=False)
-def load_all_dataset_infos(dataset_list):
-    dataset_infos = {}
-    for did in dataset_list:
-        try:
-            dataset_infos[did] = get_info_dicts(did)
-        except:
-            print("+++++++++++ MISSED", did)
-    return dataset_infos
-
 def load_existing_tags():
     has_tags = {}
     for fname in glob("saved_tags/*/*/tags.json"):
-        _, did, cid, _ = fname.split('/')
+        _, did, cid, _ = fname.split(os.sep)
         has_tags[did] = has_tags.get(did, {})
         has_tags[did][cid] = fname
     return has_tags
@@ -160,30 +128,21 @@ to pre-load the tag sets from another dataset or configuration to avoid too much
 The tag sets are saved in JSON format, but you can print a YAML version in the right-most column to copy-paste to the config README.md
 """
 
-all_dataset_ids = copy.deepcopy(get_dataset_list())
 existing_tag_sets = load_existing_tags()
-all_dataset_infos = load_all_dataset_infos(all_dataset_ids)
+all_dataset_ids = list(existing_tag_sets.keys())
 
 st.sidebar.markdown(app_desc)
 
 # option to only select from datasets that still need to be annotated
 only_missing = st.sidebar.checkbox("Show only un-annotated configs")
 
-if only_missing:
-    dataset_choose_list = ["local dataset"] + [did for did, c_dict in all_dataset_infos.items()
-                               if not all([cid in existing_tag_sets.get(did, {}) for cid in c_dict])]
-else:
-    dataset_choose_list = ["local dataset"] + list(all_dataset_infos.keys())
 
-dataset_id = st.sidebar.selectbox(
-    label="Choose dataset to tag",
-    options=dataset_choose_list,
-    index=0,
-)
+dataset_id = "local dataset"
 
+all_info_dicts = {}
 if dataset_id == "local dataset":
     path_to_info = st.sidebar.text_input("Please enter the path to the folder where the dataset_infos.json file was generated", "/path/to/dataset/")
-    if path_to_info not in ["/path/to/dataset/", ""]:
+    if path_to_info != "/path/to/dataset/":
         dataset_infos = json.load(open(pjoin(path_to_info, "dataset_infos.json")))
         confs = dataset_infos.keys()
         all_info_dicts = {}
@@ -202,8 +161,6 @@ if dataset_id == "local dataset":
                 'splits': {},
             }
         }
-else:
-    all_info_dicts = all_dataset_infos[dataset_id]
 
 if only_missing:
     config_choose_list = [cid for cid in all_info_dicts
@@ -248,8 +205,6 @@ c2.markdown(f"### Writing tags for: {dataset_id} / {config_id}")
 # Pre-load information to speed things up
 ##########
 c2.markdown("#### Pre-loading an existing tag set")
-
-existing_tag_sets = load_existing_tags()
 
 pre_loaded = {
     "task_categories": [],
@@ -442,7 +397,7 @@ with c3.beta_expander("Show JSON output for the current config"):
 
 with c3.beta_expander("Show YAML output aggregating the tags saved for all configs"):
     task_saved_configs = dict([
-        (fname.split('/')[-2], json.load(open(fname)))
+        (Path(fname).parent.name, json.load(open(fname)))
         for fname in glob(f"saved_tags/{dataset_id}/*/tags.json")
     ])
     aggregate_config = {}
